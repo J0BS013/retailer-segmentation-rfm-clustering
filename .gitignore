@@ -1,0 +1,28 @@
+# Raw data (never commit source data)
+data/raw/
+data/processed/
+
+# DuckDB database file
+*.duckdb
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs (optional — commit if you want results in the repo)
+# outputs/
