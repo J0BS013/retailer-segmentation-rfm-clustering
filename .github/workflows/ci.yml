@@ -27,3 +27,6 @@ jobs:
 
       - name: Run extract (Pandera validation)
         run: python src/extract.py
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
