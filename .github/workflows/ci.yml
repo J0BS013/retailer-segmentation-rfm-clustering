@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download dataset
+        run: |
+          pip install gdown
+          gdown --id 1SotzCF6fkLMQezLFETzlrQ4LuXy2v6Hg -O data/raw/online_retail_II.xlsx
+
+      - name: Run extract (Pandera validation)
+        run: python src/extract.py

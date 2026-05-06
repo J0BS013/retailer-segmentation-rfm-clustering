@@ -2,8 +2,6 @@
 
 Customer segmentation pipeline built on the UCI Online Retail II dataset (~1M transactions). Combines rule-based RFM scoring with K-Means clustering to identify behavioral segments and translate them into actionable business strategies.
 
-> Not all customers are equal. Champions (11% of customers) drive 43% of revenue — a classic power-law distribution that justifies differentiated treatment per segment.
-
 ---
 
 ## What is RFM?
@@ -16,26 +14,31 @@ RFM is a behavioral scoring framework used in marketing and CRM to rank customer
 
 Each dimension is scored 1–5 using **quintile-based binning** — the top 20% of customers on a given dimension always score 5, regardless of absolute values. This makes the scoring robust to outliers and distribution shifts over time.
 
-```
-Score 5 → top 20% of customers on that dimension
-Score 1 → bottom 20%
-```
-
 The combined R+F+M score determines which segment a customer belongs to. A customer with R=5, F=5, M=5 is a Champion; R=1, F=1, M=1 is Lost.
 
 This approach is validated against K-Means clustering: if the unsupervised clusters align with the quintile-based labels, the scoring logic is sound.
 
 ---
 
-## Expected Segments
+## Key Findings
 
-| Segment | % Customers | % Revenue | Avg. Order Value | Action |
-|---|---|---|---|---|
-| Champions | 11% | 43% | £482 | Reward & retain |
-| Loyal Customers | 18% | 31% | £298 | Upsell & cross-sell |
-| At Risk | 14% | 12% | £187 | Re-engagement campaign |
-| New Customers | 35% | 10% | £143 | Nurture & onboard |
-| Lost | 22% | 4% | £91 | Win-back or deprioritize |
+Analysis over 5,878 identified customers from 1,041,670 transactions (Dec 2009 – Dec 2011).
+
+| Segment | Customers | % Customers | % Revenue | Avg. Spend | Avg. Recency | Avg. Orders |
+|---|---|---|---|---|---|---|
+| Champions | 1,345 | 22.9% | **68.8%** | £9,080 | 19 days | 16.6 |
+| Loyal Customers | 1,473 | 25.1% | 16.3% | £1,960 | 65 days | 5.2 |
+| At Risk | 708 | 12.0% | 8.8% | £2,209 | 360 days | 5.4 |
+| Lost | 2,064 | 35.1% | 5.4% | £468 | 384 days | 1.3 |
+| New Customers | 288 | 4.9% | 0.6% | £397 | 32 days | 1.2 |
+
+**Champions (22.9% of customers) account for 68.8% of total revenue** — a classic power-law distribution that justifies differentiated treatment per segment.
+
+Three additional findings worth noting:
+
+- **At Risk customers spent more on average (£2,209) than Loyal Customers (£1,960)** but haven't purchased in ~360 days. They are the highest-value re-engagement target in the base.
+- **Lost customers average only 1.3 orders** — most were one-time buyers who never returned, not disengaged regulars. Win-back investment is only justified for the higher-M subset.
+- **Champions average 19 days since last purchase and 16.6 orders** — they are actively engaged and spending at a level 4.6× above the Loyal tier.
 
 ---
 
@@ -48,26 +51,53 @@ This approach is validated against K-Means clustering: if the unsupervised clust
                         │
                  extract.py
             • Concatenates both yearly sheets
-            • Drops returns (C-prefix invoices),
-              quantity adjustments, and zero-price rows
+            • Drops returns, adjustments, zero-price rows
             • Validates schema with Pandera
             • Saves to Parquet
                         │
-              data/processed/raw_validated.parquet
+                 transform.py
+            • Removes rows without Customer ID
+            • Calculates TotalPrice = Quantity × Price
+            • Aggregates per customer:
+                recency   → days since last purchase
+                frequency → distinct invoice count
+                monetary  → sum of TotalPrice
+                        │
+                   load.py
+            • Loads Parquet into DuckDB
+                        │
+              sql/02_rfm_scores.sql
+            • NTILE(5) window functions
+              score R, F, M from 1 to 5
+                        │
+              sql/03_segments.sql
+            • Maps score combinations to segment labels
+                        │
+            outputs/rfm_segments.csv + notebooks/
 ```
+
+Orchestrated by `src/run_pipeline.py`, containerized with Docker.
 
 ---
 
-## What's been built
+## RFM Scoring — core SQL
 
-**`src/extract.py`** — ingestion and validation
+```sql
+SELECT
+    "Customer ID",
+    NTILE(5) OVER (ORDER BY recency DESC)  AS r_score,
+    NTILE(5) OVER (ORDER BY frequency ASC) AS f_score,
+    NTILE(5) OVER (ORDER BY monetary ASC)  AS m_score
+FROM rfm_features
+```
 
-Reads the raw XLSX, handles the two-sheet structure of the UCI file, and runs schema validation with Pandera before persisting to Parquet.
+Score 5 is always best. Each dimension is sorted so that the worst values come first (NTILE=1) and the best come last (NTILE=5). Recency uses `DESC` because a customer inactive for 700 days should score 1, not 5.
 
-Three categories of rows are filtered before validation — they're expected in retail data but irrelevant for RFM analysis:
-- Invoices prefixed with `C` are formal cancellations
-- Negative quantities on non-C invoices are manual stock adjustments
-- Zero-price rows are samples or internal transfers
+---
+
+## Schema Validation
+
+Pandera enforces column types and business rules at ingestion. The pipeline fails fast on violations instead of propagating dirty data downstream.
 
 ```python
 raw_schema = DataFrameSchema(
@@ -82,7 +112,15 @@ raw_schema = DataFrameSchema(
 )
 ```
 
-Pandera raises a `SchemaError` with the exact column and failing rows if any check is violated — the pipeline fails fast instead of propagating dirty data.
+---
+
+## Clustering Validation
+
+K-Means applied to the normalized RFM feature space to validate the rule-based segments.
+
+- Optimal K selected via Elbow method → **K = 5**
+- Silhouette Score at K=5: **0.61** — K=5 is a local peak in the 3–10 range, confirming good cluster separation at this granularity
+- Cluster profiles align strongly with the quintile-based segment labels
 
 ---
 
@@ -112,7 +150,16 @@ cd retailer-segmentation-rfm-clustering
 # Place the .xlsx file in data/raw/
 
 pip install -r requirements.txt
-python src/extract.py
+python src/run_pipeline.py
+
+# For notebooks:
+jupyter lab
+```
+
+**With Docker:**
+```bash
+docker compose up pipeline
+docker compose up notebook  # → http://localhost:8888
 ```
 
 ---

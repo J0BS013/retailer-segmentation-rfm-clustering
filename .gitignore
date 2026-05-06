@@ -6,6 +6,9 @@ data/processed/
 *.duckdb
 *.db
 
+# Generated outputs (reproducible from pipeline)
+outputs/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -19,6 +22,12 @@ env/
 
 # Claude Code
 .claude/
+
+# VS Code extension side-effects
+logs/
+
+# Scratch scripts
+explore_db.py
 
 # OS
 .DS_Store
