@@ -6,49 +6,28 @@ Customer segmentation pipeline built on the UCI Online Retail II dataset (~1M tr
 
 ---
 
-## Pipeline
+## What is RFM?
+
+RFM is a behavioral scoring framework used in marketing and CRM to rank customers based on their purchase history. It answers three questions:
+
+- **Recency** — how recently did the customer buy? A customer who bought last week is more likely to buy again than one who bought two years ago.
+- **Frequency** — how often do they buy? Repeat buyers have a demonstrated relationship with the brand.
+- **Monetary** — how much do they spend? High spenders drive disproportionate revenue.
+
+Each dimension is scored 1–5 using **quintile-based binning** — the top 20% of customers on a given dimension always score 5, regardless of absolute values. This makes the scoring robust to outliers and distribution shifts over time.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  UCI Online Retail II (.xlsx, ~1M rows, 2 sheets)           │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                    extract.py
-               • Concatenates both sheets
-               • Drops returns (C-prefix invoices),
-                 adjustments, and zero-price rows
-               • Validates schema with Pandera
-               • Saves to Parquet
-                           │
-                    transform.py
-               • Drops rows with no Customer ID
-               • Calculates TotalPrice = Quantity × Price
-               • Aggregates per customer:
-                   recency   → days since last purchase
-                   frequency → distinct invoice count
-                   monetary  → sum of TotalPrice
-                           │
-                      load.py
-               • Loads Parquet into DuckDB tables
-                           │
-                     sql/*.sql
-               • NTILE(5) window functions
-                 to score R, F, M (1–5 each)
-               • Maps score combinations to segments
-                           │
-                   notebooks/
-               • EDA, K-Means clustering,
-                 Elbow method, Silhouette Score,
-                 segment profiling
-                           │
-               outputs/rfm_segments.csv
+Score 5 → top 20% of customers on that dimension
+Score 1 → bottom 20%
 ```
 
-Orchestrated by `src/run_pipeline.py`, containerized with Docker.
+The combined R+F+M score determines which segment a customer belongs to. A customer with R=5, F=5, M=5 is a Champion; R=1, F=1, M=1 is Lost.
+
+This approach is validated against K-Means clustering: if the unsupervised clusters align with the quintile-based labels, the scoring logic is sound.
 
 ---
 
-## Segments
+## Expected Segments
 
 | Segment | % Customers | % Revenue | Avg. Order Value | Action |
 |---|---|---|---|---|
@@ -60,26 +39,35 @@ Orchestrated by `src/run_pipeline.py`, containerized with Docker.
 
 ---
 
-## RFM Scoring
+## Pipeline
 
-Each customer is scored 1–5 per dimension using quintile-based binning. Higher is always better — Recency is inverted (fewer days = higher score).
-
-```sql
-SELECT
-    customer_id,
-    NTILE(5) OVER (ORDER BY recency ASC)    AS r_score,
-    NTILE(5) OVER (ORDER BY frequency DESC) AS f_score,
-    NTILE(5) OVER (ORDER BY monetary DESC)  AS m_score
-FROM rfm_base
 ```
-
-Quintiles are used instead of fixed thresholds so scores adapt to the data distribution — a customer ranked top 20% is always a 5, regardless of absolute values.
+┌─────────────────────────────────────────────────────┐
+│  UCI Online Retail II (.xlsx, ~1M rows, 2 sheets)   │
+└───────────────────────┬─────────────────────────────┘
+                        │
+                 extract.py
+            • Concatenates both yearly sheets
+            • Drops returns (C-prefix invoices),
+              quantity adjustments, and zero-price rows
+            • Validates schema with Pandera
+            • Saves to Parquet
+                        │
+              data/processed/raw_validated.parquet
+```
 
 ---
 
-## Schema Validation
+## What's been built
 
-Pandera enforces column types and business rules at ingestion. The pipeline fails fast on violations instead of propagating dirty data downstream.
+**`src/extract.py`** — ingestion and validation
+
+Reads the raw XLSX, handles the two-sheet structure of the UCI file, and runs schema validation with Pandera before persisting to Parquet.
+
+Three categories of rows are filtered before validation — they're expected in retail data but irrelevant for RFM analysis:
+- Invoices prefixed with `C` are formal cancellations
+- Negative quantities on non-C invoices are manual stock adjustments
+- Zero-price rows are samples or internal transfers
 
 ```python
 raw_schema = DataFrameSchema(
@@ -94,15 +82,7 @@ raw_schema = DataFrameSchema(
 )
 ```
 
----
-
-## Clustering Validation
-
-K-Means is applied to the normalized RFM feature space to validate the rule-based segments — if the clusters align with the quintile-based labels, the scoring logic is sound.
-
-- Optimal K selected via Elbow method → **K = 5**
-- Silhouette Score at K=5: **0.61** (good separation)
-- Cluster-to-segment mapping confirmed strong alignment
+Pandera raises a `SchemaError` with the exact column and failing rows if any check is violated — the pipeline fails fast instead of propagating dirty data.
 
 ---
 
@@ -121,21 +101,8 @@ K-Means is applied to the normalized RFM feature space to validate the rule-base
 
 ---
 
-## Current Status
-
-- [x] Project structure and Docker environment
-- [x] `extract.py` — schema validation with Pandera, Parquet output
-- [ ] `transform.py` — RFM feature engineering
-- [ ] `load.py` — DuckDB persistence
-- [ ] `sql/` — R/F/M scoring queries
-- [ ] Notebooks — EDA, clustering, segment insights
-- [ ] CI pipeline (GitHub Actions)
-
----
-
 ## How to Run
 
-**With Docker (recommended):**
 ```bash
 git clone https://github.com/J0BS013/retailer-segmentation-rfm-clustering.git
 cd retailer-segmentation-rfm-clustering
@@ -144,14 +111,8 @@ cd retailer-segmentation-rfm-clustering
 # https://archive.ics.uci.edu/dataset/502/online+retail+ii
 # Place the .xlsx file in data/raw/
 
-docker compose up pipeline          # runs the full ETL
-docker compose up notebook          # Jupyter at http://localhost:8888
-```
-
-**Locally:**
-```bash
 pip install -r requirements.txt
-make run
+python src/extract.py
 ```
 
 ---
